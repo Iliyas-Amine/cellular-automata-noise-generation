@@ -1,5 +1,19 @@
+import numpy as np
+
+NEIGHBOR_KERNEL = np.array([
+    [1, 1, 1],
+    [1, 0, 1],
+    [1, 1, 1]
+], dtype=np.int8)
+
 # Multipliers list for noise generation
 MULTIPLIERS = [2, 4, 8, 8, 16]
+
+# Number of tiles generated
+TILES = 20
+
+# Amplitude of the rendered noise
+AMPLITUDE = 64
 
 # Pattern for noise Stacking
 PATTERN = [0.4, 0.3, 0.15, 0.1, 0.05]
@@ -16,20 +30,14 @@ UPDATE_ITERATIONS = 25
 # The probability factor for a cell to become 'active' based on neighbors
 NEIGHBOR_ACTIVATION_FACTOR = 0.11
 
-# Sigma value for the Gaussian Filter
-SIGMA = 2
-
-# Gaussian Blur Radius
-BLUR_RADIUS = 4
-
-# Unsharp Mask Radius and Percent
-UNSHARP_RADIUS, UNSHARP_PERCENT = 32, 100
+# Unsharp Mask Percent
+UNSHARP_PERCENT = 100
 
 # Final noise output size
 RESIZE = 512
 
 # Enhancement contrast factor
-CONTRAST_FACTOR = 1.1
+CONTRAST_FACTOR = 3.0
 
 # Enabling file saving
-SAVE = True
+SAVE = False

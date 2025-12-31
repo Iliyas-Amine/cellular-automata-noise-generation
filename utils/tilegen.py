@@ -1,16 +1,6 @@
 import numpy as np
 from scipy.signal import convolve2d
-from utils.config import (GRID_SIZE, INITIAL_SEEDS, UPDATE_ITERATIONS, NEIGHBOR_ACTIVATION_FACTOR)
-
-# Define a kernel that represents the 8 neighbors
-# 1 1 1
-# 1 0 1
-# 1 1 1
-NEIGHBOR_KERNEL = np.array([
-    [1, 1, 1],
-    [1, 0, 1],
-    [1, 1, 1]
-], dtype=np.int8)
+from utils.config import (GRID_SIZE, INITIAL_SEEDS, UPDATE_ITERATIONS, NEIGHBOR_ACTIVATION_FACTOR, NEIGHBOR_KERNEL)
 
 def _update_matrix_vectorized(matrix):
     # 1. Calculate sum of neighbors for EVERY cell at once using convolution
