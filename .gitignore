@@ -3,7 +3,7 @@
 /meshes/
 /logs/
 /fnoises/
-/utils/__pycache__/
+__pycache__/
 /venv/
 test.py
 render.py

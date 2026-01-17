@@ -1,43 +1,89 @@
 import numpy as np
+from numpy.typing import NDArray
+from typing import Tuple, List
 
-NEIGHBOR_KERNEL = np.array([
+# ==========================================
+# KERNEL DEFINITIONS
+# ==========================================
+
+# _update_batch - Neighbors Kernel:
+# A 3x3 Moore neighborhood matrix used to count active neighbors in the Cellular Automata.
+# Center is 0 because a cell doesn't count itself as a neighbor.
+NEIGHBOR_KERNEL: NDArray[np.int8] = np.array([[
     [1, 1, 1],
     [1, 0, 1],
     [1, 1, 1]
-], dtype=np.int8)
+]] , dtype=np.int8)
+
+# batch_tilemap - Gaussian Blur Kernel:
+# Large kernel (31x31) to smooth the binary CA grids into soft heightmaps.
+KERNEL_01: Tuple[int, int] = (31, 31)
+
+# _enhance - Box Blur Kernel:
+# Used for general noise smoothing before contrast adjustment.
+KERNEL_02: Tuple[int, int] = (15, 15)
+
+# _enhance - (Unsharp) Box Blur Kernel:
+# Used to create a blurred mask for the Unsharp Masking technique (sharpening).
+KERNEL_03: Tuple[int, int] = (10, 10)
+
+# stacking - (Threshold) Box Blur Kernel:
+# Applied only to areas that fall below the THRESHOLD value (deep valleys/oceans).
+KERNEL_04: Tuple[int, int] = (31, 31)
+
+# stacking - Box Blur Kernel:
+# A final, subtle pass to smooth out any artifacts from the stacking process.
+KERNEL_05: Tuple[int, int] = (3, 3)
+
+# ==========================================
+# GENERATION SETTINGS
+# ==========================================
+
+# Number of individual source tiles to generate via Cellular Automata
+TILES: int = 20
+
+# Dimensions of the individual simulation grids (e.g., 64x64)
+GRID_SIZE: int = 64
+
+# Initial number of 'active' cells (population seeds) scattered across all tiles
+INITIAL_SEEDS: int = 5 * TILES
+
+# Number of generations to run the cellular automaton rules
+UPDATE_ITERATIONS: int = 25
+
+# The probability threshold: higher values make it harder for empty cells to become active
+NEIGHBOR_ACTIVATION_FACTOR: float = 0.11
+
+# stacking - Threshold Value for Blur:
+# Noise values below this cut-off are treated as "lowlands" or "water" and smoothed differently
+THRESHOLD: float = -0.55
 
 # Multipliers list for noise generation
-MULTIPLIERS = [2, 4, 8, 8, 16]
-
-# Number of tiles generated
-TILES = 20
+# Defines the scale (frequency) of each noise layer. 
+# [2, 4, 8...] acts like Octaves in Perlin noise.
+MULTIPLIERS: List[int] = [2, 4, 8, 8, 16]
 
 # Amplitude of the rendered noise
-AMPLITUDE = 64
+# Vertical scaler for the final 3D mesh points (Z-axis magnitude)
+AMPLITUDE: int = 64
 
-# Pattern for noise Stacking
-PATTERN = [0.4, 0.3, 0.15, 0.1, 0.05]
-
-# Dimensions of the simulation grid
-GRID_SIZE = 64
-
-# Initial number of 'active' cells (population seeds)
-INITIAL_SEEDS = 5
-
-# Number of iterations to run the cellular automaton update
-UPDATE_ITERATIONS = 25
-
-# The probability factor for a cell to become 'active' based on neighbors
-NEIGHBOR_ACTIVATION_FACTOR = 0.11
+# Weights for noise Stacking
+# Determines how much influence each layer (defined by MULTIPLIERS) has on the final map.
+# High influence for low-frequency (base) layers, low influence for high-frequency (detail) layers.
+WEIGHTS: NDArray[np.float64] = np.array([0.4, 0.3, 0.15, 0.1, 0.05])
 
 # Unsharp Mask Percent
-UNSHARP_PERCENT = 100
+# Strength of the edge enhancement filter (100 = strong sharpening)
+UNSHARP_PERCENT: int = 100
 
 # Final noise output size
-RESIZE = 512
+# The resolution of the final heightmap passed to the mesher
+RESIZE: int = 512
 
 # Enhancement contrast factor
-CONTRAST_FACTOR = 3.0
+# Stretches the noise values to utilize the full -1.0 to 1.0 range
+CONTRAST_FACTOR: float = 3.0
 
 # Enabling file saving
-SAVE = False
+# If True, intermediate noise maps and the final VTK mesh are written to disk
+SAVE: bool = True

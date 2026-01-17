@@ -1,37 +1,117 @@
+import logging
+from typing import List
+
 import numpy as np
-from scipy.signal import convolve2d
-from utils.config import (GRID_SIZE, INITIAL_SEEDS, UPDATE_ITERATIONS, NEIGHBOR_ACTIVATION_FACTOR, NEIGHBOR_KERNEL)
+from numpy.typing import NDArray
+from scipy.ndimage import correlate
 
-def _update_matrix_vectorized(matrix):
-    # 1. Calculate sum of neighbors for EVERY cell at once using convolution
-    # mode='same' keeps the grid size 64x64
-    neighbor_counts = convolve2d(matrix, NEIGHBOR_KERNEL, mode='same', boundary='fill', fillvalue=0)
-    
-    # 2. Generate random values for the whole grid at once
-    random_grid = np.random.uniform(0, 1, (GRID_SIZE, GRID_SIZE))
-    
-    # 3. Create a mask for where growth should happen
-    # Logic: If cell is empty (0) AND random check passes
-    growth_mask = (matrix == 0) & (random_grid < (neighbor_counts * NEIGHBOR_ACTIVATION_FACTOR))
-    
-    # 4. Apply the growth
-    # We use bitwise OR to turn the 0s into 1s where the mask is True
-    new_matrix = matrix | growth_mask.astype(np.int8)
-    
-    return new_matrix
+from utils.noiseutils import batch_tilemap
+from utils.config import (
+    GRID_SIZE, 
+    TILES, 
+    INITIAL_SEEDS, 
+    UPDATE_ITERATIONS, 
+    NEIGHBOR_ACTIVATION_FACTOR, 
+    NEIGHBOR_KERNEL
+)
 
-def _gen_pop():
-    # Initialize grid
-    env = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.int8)
+def _update_batch(matrices: NDArray[np.int8]) -> NDArray[np.int8]:
+    """
+    Performs a single simulation step on a batch of Cellular Automata grids.
+
+    This function calculates neighbor counts for every cell in the batch using 
+    convolution, generates a random probability field, and applies a stochastic 
+    growth rule. Cells become active if they have sufficient neighbors and 
+    satisfy the probability condition defined by NEIGHBOR_ACTIVATION_FACTOR.
+
+    Args:
+        matrices (NDArray[np.int8]): A 3D array (Batch, Row, Col) representing 
+            the current binary state of the cellular grids (0 for empty, 1 for active).
+
+    Returns:
+        NDArray[np.int8]: The updated 3D array after applying the growth rules.
+    """
+    # Correlate calculates the sum of neighbors for each cell
+    # 'mode=constant' and 'cval=0' ensures edges behave as if surrounded by empty space
+    neighbor_counts: NDArray[np.int8] = correlate(
+        matrices, 
+        NEIGHBOR_KERNEL, 
+        mode='wrap'
+    )
+
+    # Generate a random probability grid for stochastic growth
+    # This ensures that even with identical neighbors, growth patterns differ
+    random_grid: NDArray[np.float64] = np.random.uniform(0, 1, matrices.shape)
     
-    # Place seeds (Vectorized random choice)
-    # We pick flat indices and unravel them to x,y coordinates
-    flat_indices = np.random.choice(GRID_SIZE * GRID_SIZE, INITIAL_SEEDS, replace=False)
-    x_coords, y_coords = np.unravel_index(flat_indices, (GRID_SIZE, GRID_SIZE))
-    env[x_coords, y_coords] = 1
+    # Determine which cells grow based on neighbors and chance
+    # Rule: An empty cell becomes active IF random_val < (neighbors * factor)
+    growth_mask: NDArray[np.bool_] = (matrices == 0) & (
+        random_grid < (neighbor_counts * NEIGHBOR_ACTIVATION_FACTOR)
+    )
+
+    # Return the union of old cells and newly grown cells
+    return matrices | growth_mask.astype(np.int8)
+
+def _gen_pop_batch() -> NDArray[np.int8]:
+    """
+    Initializes and evolves a fresh batch of cellular automata environments.
+
+    This function creates an empty 3D environment (representing a batch of 2D tiles),
+    seeds it with a specific number of random 'alive' cells, and then iterates 
+    the simulation for a fixed number of steps (UPDATE_ITERATIONS) to generate 
+    organic-looking clusters.
+
+    Returns:
+        NDArray[np.int8]: A 3D array containing the final binary states of 
+        all generated tiles.
+    """
+    # Initialize empty 3D environment (Batch of 2D grids)
+    # Shape is (TILES, 64, 64) allowing us to process all tiles in parallel
+    env: NDArray[np.int8] = np.zeros((TILES, GRID_SIZE, GRID_SIZE), dtype=np.int8)
+
+    # Select random indices to seed the population
+    # We sample from the flattened total size to ensure unique seeds across the batch
+    flat_indices: NDArray[np.int_] = np.random.choice(
+        TILES * GRID_SIZE * GRID_SIZE, 
+        INITIAL_SEEDS, 
+        replace=False
+    )
     
-    # Run iterations
+    # Convert flat indices to 3D coordinates (Tile Index, Row, Col)
+    x: NDArray[np.intp]
+    y: NDArray[np.intp]
+    z: NDArray[np.intp]
+    x, y, z = np.unravel_index(flat_indices, (TILES, GRID_SIZE, GRID_SIZE))
+    
+    # Set initial seeds to 'Alive' (1)
+    env[x, y, z] = 1
+
+    # Run the simulation steps
     for _ in range(UPDATE_ITERATIONS):
-        env = _update_matrix_vectorized(env)
+        env = _update_batch(env)
         
     return env
+
+def gen_tiles() -> List[NDArray[np.floating]]:
+    """
+    Orchestrates the generation of smooth terrain tiles.
+
+    This is the main public entry point for tile generation. It generates the 
+    raw binary cellular automata patterns via `_gen_pop_batch` and then processes 
+    them into smooth, floating-point heightmaps using `batch_tilemap`.
+
+    Returns:
+        List[NDArray[np.floating]]: A list of generated 2D heightmap arrays, 
+        where each array represents a seamless terrain tile ready for noise stitching.
+    """
+    logging.info(f"Generating {TILES} tiles...")
+    
+    # Create the raw binary (0/1) cellular automata grids
+    matrices: NDArray[np.int8] = _gen_pop_batch()
+    
+    # batch_tilemap takes the int8 binary maps and returns blurred float maps
+    # This converts the sharp "islands" into smooth heightmap gradients
+    tiles: List[NDArray[np.floating]] = batch_tilemap(matrices)
+    
+    logging.info(f"All {TILES} tiles generated")
+    return tiles
