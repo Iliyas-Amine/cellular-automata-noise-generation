@@ -36,6 +36,29 @@ KERNEL_04: Tuple[int, int] = (31, 31)
 KERNEL_05: Tuple[int, int] = (3, 3)
 
 # ==========================================
+# RNG DEFINITIONS
+# ==========================================
+
+# Master seed for deterministic terrain generation
+SEED: str = str(1234567890123456).zfill(16)
+
+# _gen_pop_batch - Automaton Seed Positions:
+POS_SEED: int = int(SEED[:4])
+POS_RNG = np.random.default_rng(seed=POS_SEED)
+
+# _update_batch - Automaton Probability Grid:
+PROB_SEED: int = int(SEED[4:8])
+PROB_RNG = np.random.default_rng(seed=PROB_SEED)
+
+# batch_tilemap - Base White Noise Matrix:
+SMOO_SEED: int = int(SEED[8:12])
+SMOO_RNG = np.random.default_rng(seed=SMOO_SEED)
+
+# _stitch - Order of Tile Stitching:
+STIT_SEED: int = int(SEED[12:])
+STIT_RNG = np.random.default_rng(seed=STIT_SEED)
+
+# ==========================================
 # GENERATION SETTINGS
 # ==========================================
 
@@ -54,6 +77,12 @@ UPDATE_ITERATIONS: int = 25
 # The probability threshold: higher values make it harder for empty cells to become active
 NEIGHBOR_ACTIVATION_FACTOR: float = 0.11
 
+# The overlap during tile stitching
+OVERLAP = 8
+
+# Used to calculate the overall size of a stitched matrix
+STRIDE = GRID_SIZE - OVERLAP
+
 # stacking - Threshold Value for Blur:
 # Noise values below this cut-off are treated as "lowlands" or "water" and smoothed differently
 THRESHOLD: float = -0.55
@@ -61,20 +90,20 @@ THRESHOLD: float = -0.55
 # Multipliers list for noise generation
 # Defines the scale (frequency) of each noise layer. 
 # [2, 4, 8...] acts like Octaves in Perlin noise.
-MULTIPLIERS: List[int] = [2, 4, 8, 8, 16]
+MULTIPLIERS: List[int] = [2, 4, 8, 16, 64]
 
 # Amplitude of the rendered noise
 # Vertical scaler for the final 3D mesh points (Z-axis magnitude)
-AMPLITUDE: int = 64
+AMPLITUDE: int = 48
 
 # Weights for noise Stacking
 # Determines how much influence each layer (defined by MULTIPLIERS) has on the final map.
 # High influence for low-frequency (base) layers, low influence for high-frequency (detail) layers.
-WEIGHTS: NDArray[np.float64] = np.array([0.4, 0.3, 0.15, 0.1, 0.05])
+WEIGHTS: NDArray[np.float64] = np.array([0.50, 0.25, 0.13, 0.09, 0.03])
 
 # Unsharp Mask Percent
 # Strength of the edge enhancement filter (100 = strong sharpening)
-UNSHARP_PERCENT: int = 100
+UNSHARP_PERCENT: int = 45
 
 # Final noise output size
 # The resolution of the final heightmap passed to the mesher

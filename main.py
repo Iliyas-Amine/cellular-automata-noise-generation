@@ -81,5 +81,6 @@ def run() -> None:
 
 # Entry point of the script
 if __name__ == "__main__":
-    clean_dirs()
+    # To clear the directories on each run, remove the comment below
+    #clean_dirs()
     run()

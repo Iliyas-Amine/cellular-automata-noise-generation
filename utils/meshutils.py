@@ -1,12 +1,12 @@
 import logging
-from os import urandom, makedirs
 
 import numpy as np
 from numpy.typing import NDArray
+from os import makedirs
 import vtk
 from vtk.util import numpy_support
 
-from utils.config import SAVE
+from utils.config import SAVE, SEED
 
 def _create_vtk_mesh_vectorized(noise_map: NDArray[np.floating]) -> vtk.vtkPolyData:
     """
@@ -43,8 +43,8 @@ def _create_vtk_mesh_vectorized(noise_map: NDArray[np.floating]) -> vtk.vtkPolyD
     
     # Interleave arrays to create a standard (x, y, z) points list: [x0, y0, z0, x1, y1, z1...]
     # VTK requires float32 or float64 for coordinates usually
-    coords: NDArray[np.floating] = np.column_stack((flat_x, flat_y, flat_z)).ravel()
-    
+    coords: NDArray[np.floating] = np.column_stack((flat_x, flat_y, flat_z)).ravel().astype(np.float32)
+
     # Zero-copy conversion from NumPy array to VTK array
     vtk_float_array: vtk.vtkFloatArray = numpy_support.numpy_to_vtk(
         num_array=coords, 
@@ -101,20 +101,18 @@ def gen_mesh(noise_map: NDArray[np.floating]) -> None:
     Args:
         noise_map (NDArray[np.floating]): The final processed heightmap to be meshed.
     """
-    # Generate a random ID for the file name to prevent overwrites
-    uid: str = urandom(4).hex()
     logging.info("Generating VTK mesh...")
-    logging.debug(f"Mesh#{uid} - Noise loaded")
+    logging.debug(f"Mesh#{SEED} - Noise loaded")
     
-    logging.debug(f"Mesh#{uid} - Creating primary mesh (Vectorized)...")
+    logging.debug(f"Mesh#{SEED} - Creating primary mesh (Vectorized)...")
     # Convert the 2D heightmap array into 3D geometry
     vtk_mesh: vtk.vtkPolyData = _create_vtk_mesh_vectorized(noise_map)
-    logging.debug(f"Mesh#{uid} - Created primary mesh")
+    logging.debug(f"Mesh#{SEED} - Created primary mesh")
     
     if SAVE:
-        logging.debug(f"Mesh#{uid} - Saving...")
+        logging.debug(f"Mesh#{SEED} - Saving...")
         makedirs("meshes", exist_ok=True)
-        _save_vtk_mesh(vtk_mesh, f"meshes/mesh_{uid}.vtk")
-        logging.debug(f"Mesh#{uid} - Saved")
+        _save_vtk_mesh(vtk_mesh, f"meshes/mesh_{SEED}.vtk")
+        logging.debug(f"Mesh#{SEED} - Saved")
     
     logging.info("VTK meshes generated")

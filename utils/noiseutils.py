@@ -9,10 +9,11 @@ from numpy.typing import NDArray
 from utils.config import (
     SAVE, TILES, GRID_SIZE, KERNEL_01, KERNEL_02, KERNEL_03, 
     KERNEL_04, KERNEL_05, CONTRAST_FACTOR, UNSHARP_PERCENT, 
-    RESIZE, MULTIPLIERS, THRESHOLD, WEIGHTS, AMPLITUDE
+    RESIZE, MULTIPLIERS, THRESHOLD, WEIGHTS, AMPLITUDE,
+    STIT_RNG, SMOO_RNG, SEED, STRIDE, OVERLAP
 )
 
-def save_noise_image(data: NDArray[np.floating], folder: str, prefix: str) -> None:
+def save_noise_image(data: NDArray[np.floating], folder: str, filename: str) -> None:
     """
     Normalizes and saves a floating-point noise array as a PNG image.
 
@@ -23,7 +24,7 @@ def save_noise_image(data: NDArray[np.floating], folder: str, prefix: str) -> No
     Args:
         data (NDArray[np.floating]): The 2D noise array to save.
         folder (str): The target directory for the image file.
-        prefix (str): A prefix for the filename (e.g., 'tile', 'noise').
+        filename (str): A filename for the file.
     """
     if SAVE:
         os.makedirs(folder, exist_ok=True)
@@ -34,7 +35,7 @@ def save_noise_image(data: NDArray[np.floating], folder: str, prefix: str) -> No
         # Scale to 0-255 for standard 8-bit image format
         norm_img: NDArray[np.uint8] = (shifted * 127.5).astype(np.uint8) 
         
-        filename: str = os.path.join(folder, f"{prefix}_{os.urandom(4).hex()}.png") 
+        filename: str = os.path.join(folder, f"{filename}.png") 
         cv2.imwrite(filename, norm_img)
 
 def batch_tilemap(matrices: NDArray[np.int8]) -> List[NDArray[np.floating]]:
@@ -57,7 +58,7 @@ def batch_tilemap(matrices: NDArray[np.int8]) -> List[NDArray[np.floating]]:
     # Convert input binary matrices to float for noise processing
     matrices_arr: NDArray[np.int8] = np.array(matrices)
     # Generate base white noise
-    noise_batch: NDArray[np.floating] = np.random.uniform(0.01, 1, size=(TILES, GRID_SIZE, GRID_SIZE))
+    noise_batch: NDArray[np.float32] = SMOO_RNG.uniform(0.01, 1, size=(TILES, GRID_SIZE, GRID_SIZE)).astype(np.float32)
 
     mask_above: NDArray[np.bool_] = (matrices_arr == 1)
 
@@ -71,48 +72,55 @@ def batch_tilemap(matrices: NDArray[np.int8]) -> List[NDArray[np.floating]]:
         blurred: NDArray[np.floating] = cv2.GaussianBlur(noise_batch[i], KERNEL_01, 0)
         smoothed_batch.append(blurred)
         
-        save_noise_image(blurred, "tiles", "tile")
+        save_noise_image(blurred, "tiles", f"tile_{SEED}_{i}")
     
     return smoothed_batch
 
 def _stitch(multiplier: int, tiles: NDArray[np.floating]) -> NDArray[np.float32]:
     """
-    Creates a large noise grid by stitching together random base tiles.
-
-    This function expands the grid size by the given multiplier and fills it 
-    by randomly sampling from the provided list of base tiles. This technique 
-    allows for infinite texture generation from a finite set of source patterns.
-
-    Args:
-        multiplier (int): The factor by which to multiply the base grid size 
-            (e.g., a multiplier of 2 creates a 2x2 grid of tiles).
-        tiles (NDArray[np.floating]): The pool of base tiles to sample from.
-
-    Returns:
-        NDArray[np.float32]: A single large 2D grid composed of stitched tiles.
+    Creates a large noise grid by stitching together random base tiles using
+    an overlapping stride and linear cross-dissolve to eliminate grid seams.
     """
-    # Calculate the size of the new combined grid (e.g., if multiplier is 2, size is 2x64 = 128)
-    current_size: int = multiplier * GRID_SIZE
+    # The grid size scales dynamically based on overlapping strides
+    current_size: int = multiplier * STRIDE + OVERLAP
     noise_grid: NDArray[np.float32] = np.zeros((current_size, current_size), dtype=np.float32)
 
     total_tiles: int = multiplier * multiplier
-    
-    # Randomly sample tiles to fill the grid
-    # We sample with replacement to create a larger texture from our limited tile set
-    selected_tiles: List[NDArray[np.floating]] = random.choices(list(tiles), k=total_tiles)
+    selected_tiles = STIT_RNG.choice(tiles, size=total_tiles, replace=True)
 
-    # Paste the selected tiles into the large grid row by row
+    # Pre-compute 1D linear blending ramps for fast vector operations
+    ramp = np.linspace(0, 1, OVERLAP, dtype=np.float32)
+    h_ramp = ramp[None, :]  # Horizontal blend row vector (1, OVERLAP)
+    v_ramp = ramp[:, None]  # Vertical blend column vector (OVERLAP, 1)
+
     for idx, tile in enumerate(selected_tiles):
         row: int = idx // multiplier
         col: int = idx % multiplier
-        
-        y_start: int = row * GRID_SIZE
+
+        # Calculate positioning based on STRIDE instead of static GRID_SIZE
+        y_start: int = row * STRIDE
         y_end: int = y_start + GRID_SIZE
-        x_start: int = col * GRID_SIZE
+        x_start: int = col * STRIDE
         x_end: int = x_start + GRID_SIZE
-        
-        noise_grid[y_start:y_end, x_start:x_end] = tile
-    
+
+        # Create a float32 working copy of the tile to modify borders
+        tile_to_paste = tile.astype(np.float32).copy()
+
+        # If a tile exists to the left, cross-fade the left overlap strip
+        if col > 0:
+            existing_left = noise_grid[y_start:y_end, x_start:x_start + OVERLAP]
+            tile_to_paste[:, :OVERLAP] = (existing_left * (1.0 - h_ramp) + 
+                                          tile_to_paste[:, :OVERLAP] * h_ramp)
+
+        # If a tile exists above, cross-fade the top overlap strip
+        if row > 0:
+            existing_top = noise_grid[y_start:y_start + OVERLAP, x_start:x_end]
+            tile_to_paste[:OVERLAP, :] = (existing_top * (1.0 - v_ramp) + 
+                                          tile_to_paste[:OVERLAP, :] * v_ramp)
+
+        # Paste the blended tile into the master grid
+        noise_grid[y_start:y_end, x_start:x_end] = tile_to_paste
+
     return noise_grid
 
 def _enhance(noise_grid: NDArray[np.float32]) -> NDArray[np.float32]:
@@ -133,8 +141,7 @@ def _enhance(noise_grid: NDArray[np.float32]) -> NDArray[np.float32]:
     noise_grid = cv2.blur(noise_grid, KERNEL_02)
 
     # Increase contrast to make the terrain more dramatic
-    noise_grid *= CONTRAST_FACTOR
-    np.clip(noise_grid, -1.0, 1.0, out=noise_grid)
+    noise_grid = np.tanh(noise_grid*CONTRAST_FACTOR)
 
     amount: float = UNSHARP_PERCENT / 100.0 if UNSHARP_PERCENT > 1 else float(UNSHARP_PERCENT)
     
@@ -193,7 +200,7 @@ def _join_tiles(multiplier: int, tiles: NDArray[np.floating]) -> NDArray[np.floa
     noise_grid = _enhance(noise_grid)
     noise_grid = _resize(noise_grid)
 
-    save_noise_image(noise_grid, "noises", f"noise_g{multiplier}")
+    save_noise_image(noise_grid, "noises", f"noise_g{multiplier}_{SEED}")
 
     return noise_grid
 
@@ -243,18 +250,24 @@ def stacking(noises: List[NDArray[np.float32]]) -> NDArray[np.float32]:
     # This creates the fractal "Perlin-like" effect where some layers provide large shapes and others provide detail
     noise_sum: NDArray[np.float32] = np.tensordot(weights, noise_stack, axes=1)
 
-    # Identify "water" or "lowland" areas
-    mask: NDArray[np.bool_] = (noise_sum <= THRESHOLD)
+    # Identify "water" or "lowland" areas and map them to 1.0 and 0.0
+    mask: NDArray[np.float32] = (noise_sum <= THRESHOLD).astype(np.float32)
     
     if mask.any():
+        # Soften the hard binary edges by blurring the mask itself
+        smooth_alpha = cv2.GaussianBlur(mask, (15, 15), 0)
         # Apply extra smoothing to low areas to simulate sediment or water
         blurred_section: NDArray[np.float32] = cv2.blur(noise_sum, KERNEL_04)
-        noise_sum[mask] = blurred_section[mask]
-
+        # Linearly blend across the entire map using the alpha channel
+        # Deep valleys get the full 85% blur mix.
+        # Highlands get 0% blur mix (completely untouched).
+        # The borders transition perfectly smoothly, eliminating derivative creases.
+        blend_factor = smooth_alpha * 0.85
+        noise_sum = (blurred_section * blend_factor) + (noise_sum * (1.0 - blend_factor))
     # Final overall smooth to remove any remaining artifacts
     cv2.blur(noise_sum, KERNEL_05, dst=noise_sum)
 
-    save_noise_image(noise_sum, "fnoises", "noise_f")
+    save_noise_image(noise_sum, "fnoises", f"noise_{SEED}")
 
     # Scale the normalized heightmap to the final physical height (Amplitude)
     return noise_sum * AMPLITUDE

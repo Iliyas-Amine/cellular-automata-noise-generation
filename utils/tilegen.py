@@ -12,7 +12,9 @@ from utils.config import (
     INITIAL_SEEDS, 
     UPDATE_ITERATIONS, 
     NEIGHBOR_ACTIVATION_FACTOR, 
-    NEIGHBOR_KERNEL
+    NEIGHBOR_KERNEL,
+    POS_RNG,
+    PROB_RNG
 )
 
 def _update_batch(matrices: NDArray[np.int8]) -> NDArray[np.int8]:
@@ -41,7 +43,7 @@ def _update_batch(matrices: NDArray[np.int8]) -> NDArray[np.int8]:
 
     # Generate a random probability grid for stochastic growth
     # This ensures that even with identical neighbors, growth patterns differ
-    random_grid: NDArray[np.float64] = np.random.uniform(0, 1, matrices.shape)
+    random_grid: NDArray[np.float64] = PROB_RNG.uniform(0, 1, matrices.shape)
     
     # Determine which cells grow based on neighbors and chance
     # Rule: An empty cell becomes active IF random_val < (neighbors * factor)
@@ -71,7 +73,7 @@ def _gen_pop_batch() -> NDArray[np.int8]:
 
     # Select random indices to seed the population
     # We sample from the flattened total size to ensure unique seeds across the batch
-    flat_indices: NDArray[np.int_] = np.random.choice(
+    flat_indices: NDArray[np.int_] = POS_RNG.choice(
         TILES * GRID_SIZE * GRID_SIZE, 
         INITIAL_SEEDS, 
         replace=False
