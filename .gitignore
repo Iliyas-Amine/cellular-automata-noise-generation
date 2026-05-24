@@ -10,3 +10,4 @@ render.py
 .dockerignore
 *.png
 *.vtk
+.env
