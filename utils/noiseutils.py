@@ -1,7 +1,7 @@
 import numpy as np
 import random
 import cv2
-import os
+import os, time, logging
 from typing import List
 
 from numpy.typing import NDArray
@@ -78,50 +78,23 @@ def batch_tilemap(matrices: NDArray[np.int8]) -> List[NDArray[np.floating]]:
 
 def _stitch(multiplier: int, tiles: NDArray[np.floating]) -> NDArray[np.float32]:
     """
-    Creates a large noise grid by stitching together random base tiles using
-    an overlapping stride and linear cross-dissolve to eliminate grid seams.
+    Creates a large noise grid by stitching together random base tiles.
+    Completely vectorized using tensor transposition to eliminate Python loops.
     """
-    # The grid size scales dynamically based on overlapping strides
-    current_size: int = multiplier * STRIDE + OVERLAP
-    noise_grid: NDArray[np.float32] = np.zeros((current_size, current_size), dtype=np.float32)
-
     total_tiles: int = multiplier * multiplier
+    
+    # 1. Native sampling of the 3D tiles array along Axis 0
     selected_tiles = STIT_RNG.choice(tiles, size=total_tiles, replace=True)
 
-    # Pre-compute 1D linear blending ramps for fast vector operations
-    ramp = np.linspace(0, 1, OVERLAP, dtype=np.float32)
-    h_ramp = ramp[None, :]  # Horizontal blend row vector (1, OVERLAP)
-    v_ramp = ramp[:, None]  # Vertical blend column vector (OVERLAP, 1)
-
-    for idx, tile in enumerate(selected_tiles):
-        row: int = idx // multiplier
-        col: int = idx % multiplier
-
-        # Calculate positioning based on STRIDE instead of static GRID_SIZE
-        y_start: int = row * STRIDE
-        y_end: int = y_start + GRID_SIZE
-        x_start: int = col * STRIDE
-        x_end: int = x_start + GRID_SIZE
-
-        # Create a float32 working copy of the tile to modify borders
-        tile_to_paste = tile.astype(np.float32).copy()
-
-        # If a tile exists to the left, cross-fade the left overlap strip
-        if col > 0:
-            existing_left = noise_grid[y_start:y_end, x_start:x_start + OVERLAP]
-            tile_to_paste[:, :OVERLAP] = (existing_left * (1.0 - h_ramp) + 
-                                          tile_to_paste[:, :OVERLAP] * h_ramp)
-
-        # If a tile exists above, cross-fade the top overlap strip
-        if row > 0:
-            existing_top = noise_grid[y_start:y_start + OVERLAP, x_start:x_end]
-            tile_to_paste[:OVERLAP, :] = (existing_top * (1.0 - v_ramp) + 
-                                          tile_to_paste[:OVERLAP, :] * v_ramp)
-
-        # Paste the blended tile into the master grid
-        noise_grid[y_start:y_end, x_start:x_end] = tile_to_paste
-
-    return noise_grid
+    # 2. Vectorized block-rearrangement (Eliminates the 404/4096 loop entirely!)
+    # Reshape to 4D: (tile_row, tile_col, pixel_row, pixel_col)
+    tensor_4d = selected_tiles.reshape(multiplier, multiplier, GRID_SIZE, GRID_SIZE)
+    
+    # Transpose to block tile_row with pixel_row, and tile_col with pixel_col
+    transposed = tensor_4d.transpose(0, 2, 1, 3)
+    
+    # Collapse back into a continuous 2D stitched canvas 
+    return transposed.reshape(multiplier * GRID_SIZE, multiplier * GRID_SIZE)
 
 def _enhance(noise_grid: NDArray[np.float32]) -> NDArray[np.float32]:
     """
@@ -137,17 +110,31 @@ def _enhance(noise_grid: NDArray[np.float32]) -> NDArray[np.float32]:
     Returns:
         NDArray[np.float32]: The enhanced and sharpened noise grid.
     """
+    t0: int = time.time()
     # Initial blur to blend the seams between stitched tiles
-    noise_grid = cv2.blur(noise_grid, KERNEL_02)
-
-    # Increase contrast to make the terrain more dramatic
-    noise_grid = np.tanh(noise_grid*CONTRAST_FACTOR)
-
-    amount: float = UNSHARP_PERCENT / 100.0 if UNSHARP_PERCENT > 1 else float(UNSHARP_PERCENT)
+    cv2.blur(noise_grid, KERNEL_02, dst=noise_grid)
+    t1: int = time.time()
+    logging.debug(f"Time for initial blur: {t1-t0}s")
+    # 2. High-Contrast Algebraic Sigmoid (Zero-Allocation Register Math)
+    # Computes: noise_grid / sqrt(0.12 + noise_grid^2)
+    denom = noise_grid ** 2
     
+    # TUNING KNOB: 
+    # Lower this value (e.g., 0.05) for harsher contrast and wider flat plateaus.
+    # Raise this value (e.g., 0.25) to soften the cliffs into rolling hills.
+    denom += 0.065 
+    
+    np.sqrt(denom, out=denom)
+    noise_grid /= denom
+    t2: int = time.time()
+    logging.debug(f"Time for contrasting and tanh: {t2-t1}s")
+
+    amount: float = UNSHARP_PERCENT / 100.0 if UNSHARP_PERCENT > 1 else float(UNSHARP_PERCENT)    
     # Apply Unsharp Masking to sharpen details (peaks and ridges)
     if amount != 0:
         blurred_mask: NDArray[np.float32] = cv2.blur(noise_grid, KERNEL_03)
+        t3: int = time.time()
+        logging.debug(f"Time for secondary blur: {t3-t2}s")
         cv2.addWeighted(
             noise_grid, 1.0 + amount, 
             blurred_mask, -amount, 
@@ -155,6 +142,8 @@ def _enhance(noise_grid: NDArray[np.float32]) -> NDArray[np.float32]:
             dst=noise_grid
         )
         np.clip(noise_grid, -1.0, 1.0, out=noise_grid)
+        t4: int = time.time()
+        logging.debug(f"Time for sharpening: {t4-t3}s")
     
     return noise_grid
     
@@ -195,11 +184,20 @@ def _join_tiles(multiplier: int, tiles: NDArray[np.floating]) -> NDArray[np.floa
     Returns:
         NDArray[np.float32]: A fully processed 2D noise layer ready for stacking.
     """
-    # Pipeline: Stitch small tiles -> Enhance/Sharpen -> Resize to target resolution
+    # Pipeline: Stitch small tiles -> Enhance/Sharpen -> Resize to target resolution 
+    t0: int = time.time()
     noise_grid: NDArray[np.float32] = _stitch(multiplier, tiles)
+    t1: int = time.time()
+    logging.debug(f"Time for full _stitch: {t1-t0}s")
     noise_grid = _enhance(noise_grid)
-    noise_grid = _resize(noise_grid)
-
+    t2: int = time.time() 
+    logging.debug(f"Time for full _enhance: {t2-t1}s") 
+    noise_grid = _resize(noise_grid)   
+    t3: int = time.time() 
+    logging.debug(f"Time for full _resize: {t3-t2}s") 
+    t4: int = time.time()
+    
+    logging.debug(f"Time for full _join_tiles for {multiplier}: {t4-t0}s")
     save_noise_image(noise_grid, "noises", f"noise_g{multiplier}_{SEED}")
 
     return noise_grid

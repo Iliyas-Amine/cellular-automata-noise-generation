@@ -16,7 +16,7 @@ from utils.config import SAVE
 
 # Configure logging to write to a timestamped file in the 'logs' directory
 os.makedirs("logs", exist_ok=True)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(funcName)s - %(levelname)s - %(message)s',
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(funcName)s - %(levelname)s - %(message)s',
                     filename=f"logs/{time.strftime('%Y%m%d_%H%M%S')}.log")
 
 def clean_dirs():

@@ -25,7 +25,7 @@ KERNEL_02: Tuple[int, int] = (15, 15)
 
 # _enhance - (Unsharp) Box Blur Kernel:
 # Used to create a blurred mask for the Unsharp Masking technique (sharpening).
-KERNEL_03: Tuple[int, int] = (10, 10)
+KERNEL_03: Tuple[int, int] = (11, 11)
 
 # stacking - (Threshold) Box Blur Kernel:
 # Applied only to areas that fall below the THRESHOLD value (deep valleys/oceans).
