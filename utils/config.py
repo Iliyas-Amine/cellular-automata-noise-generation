@@ -23,12 +23,13 @@ KERNEL_01: Tuple[int, int] = (31, 31)
 # Used for general noise smoothing before contrast adjustment.
 KERNEL_02: Tuple[int, int] = (15, 15)
 
-# _enhance - (Unsharp) Box Blur Kernel:
-# Used to create a blurred mask for the Unsharp Masking technique (sharpening).
-KERNEL_03: Tuple[int, int] = (11, 11)
+# stacking - (Mask) Gaussian Blur Kernel:
+# Used to soften the hard binary edges of the lowland/water mask before blending.
+KERNEL_03: Tuple[int, int] = (15, 15)
 
 # stacking - (Threshold) Box Blur Kernel:
-# Applied only to areas that fall below the THRESHOLD value (deep valleys/oceans).
+# Computed across the entire grid for vectorization efficiency, but alpha-composited 
+# specifically into areas below the THRESHOLD to simulate smoothed sediment/water.
 KERNEL_04: Tuple[int, int] = (31, 31)
 
 # stacking - Box Blur Kernel:
@@ -77,12 +78,6 @@ UPDATE_ITERATIONS: int = 25
 # The probability threshold: higher values make it harder for empty cells to become active
 NEIGHBOR_ACTIVATION_FACTOR: float = 0.11
 
-# The overlap during tile stitching
-OVERLAP = 8
-
-# Used to calculate the overall size of a stitched matrix
-STRIDE = GRID_SIZE - OVERLAP
-
 # stacking - Threshold Value for Blur:
 # Noise values below this cut-off are treated as "lowlands" or "water" and smoothed differently
 THRESHOLD: float = -0.55
@@ -90,7 +85,7 @@ THRESHOLD: float = -0.55
 # Multipliers list for noise generation
 # Defines the scale (frequency) of each noise layer. 
 # [2, 4, 8...] acts like Octaves in Perlin noise.
-MULTIPLIERS: List[int] = [2, 4, 8, 16, 64]
+MULTIPLIERS: List[int] = [2, 4, 8, 16, 32]
 
 # Amplitude of the rendered noise
 # Vertical scaler for the final 3D mesh points (Z-axis magnitude)
@@ -99,20 +94,23 @@ AMPLITUDE: int = 48
 # Weights for noise Stacking
 # Determines how much influence each layer (defined by MULTIPLIERS) has on the final map.
 # High influence for low-frequency (base) layers, low influence for high-frequency (detail) layers.
-WEIGHTS: NDArray[np.float64] = np.array([0.50, 0.25, 0.13, 0.09, 0.03])
-
-# Unsharp Mask Percent
-# Strength of the edge enhancement filter (100 = strong sharpening)
-UNSHARP_PERCENT: int = 45
+WEIGHTS: NDArray[np.float64] = np.array([0.50, 0.25, 0.09, 0.08, 0.08])
 
 # Final noise output size
 # The resolution of the final heightmap passed to the mesher
 RESIZE: int = 512
 
 # Enhancement contrast factor
-# Stretches the noise values to utilize the full -1.0 to 1.0 range
+# Stretches the noise values, bigger is less contrast, smaller is more contrast
 CONTRAST_FACTOR: float = 3.0
 
-# Enabling file saving
-# If True, intermediate noise maps and the final VTK mesh are written to disk
+# Lowland Blend Percentage
+# Controls the interpolation strength between the raw noise map and the heavily 
+# smoothed "sediment" map in areas below the THRESHOLD. A value of 1.0 
+# is fully smoothed terrain, 0.0 ignores the lowland smoothing entirely.
+BLEND_PERCENT: float = 0.85
+
+# Artifact Output Flag
+# If True, intermediate generation steps (normalized heightmaps) and the final 
+# VTK mesh geometry are actively written to the disk.
 SAVE: bool = True

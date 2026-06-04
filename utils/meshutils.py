@@ -10,61 +10,55 @@ from utils.config import SAVE, SEED
 
 def _create_vtk_mesh_vectorized(noise_map: NDArray[np.floating]) -> vtk.vtkPolyData:
     """
-    Converts a 2D heightmap into a 3D VTK mesh using efficient vectorized operations.
+    Converts a 2D heightmap into a 3D VTK mesh using true zero-copy vectorized operations.
 
-    This function generates a structured grid where the X and Y coordinates correspond 
-    to the array indices and the Z coordinate corresponds to the noise value (height).
-    It leverages NumPy's `meshgrid` and `column_stack` to prepare the data for VTK 
-    without explicit Python loops, significantly improving performance.
-
+    Memory Layout Alignment:
+    - NumPy C-contiguous arrays vary the column index fastest.
+    - VTK StructuredGrids mandate the X-coordinate varies fastest.
+    - Therefore, NumPy columns map to VTK X, and NumPy rows map to VTK Z.
+    - The noise values map to the VTK Y-axis (elevation).
     Args:
         noise_map (NDArray[np.floating]): A 2D array representing the terrain heightmap.
 
     Returns:
         vtk.vtkPolyData: The generated 3D geometry compatible with VTK rendering and storage.
     """
-    rows: int
-    cols: int
     rows, cols = noise_map.shape
     
-    # Generate index arrays for the grid coordinates
-    x: NDArray[np.intp] = np.arange(0, rows, 1)
-    y: NDArray[np.intp] = np.arange(0, cols, 1)
+    # Match spatial axes to VTK's required memory layout (X varies fastest)
+    x = np.arange(0, cols, 1)  # X maps to columns
+    z = np.arange(0, rows, 1)  # Z maps to rows
     
-    # Create 2D coordinate matrices from the 1D index arrays
-    mx: NDArray[np.intp]
-    my: NDArray[np.intp]
-    mx, my = np.meshgrid(x, y, indexing='ij') 
+    # indexing='xy' ensures mx varies fastest (cols) and mz varies slowest (rows)
+    mx, mz = np.meshgrid(x, z, indexing='xy') 
     
-    # Flatten everything to 1D arrays to prepare for interleaved stacking
-    flat_x: NDArray[np.intp] = mx.ravel()
-    flat_y: NDArray[np.floating] = noise_map.ravel() # The height (Z) comes from our noise map
-    flat_z: NDArray[np.intp] = my.ravel()        
-    
-    # Interleave arrays to create a standard (x, y, z) points list: [x0, y0, z0, x1, y1, z1...]
-    # VTK requires float32 or float64 for coordinates usually
-    coords: NDArray[np.floating] = np.column_stack((flat_x, flat_y, flat_z)).ravel().astype(np.float32)
+    # Pre-allocate the (N, 3) coordinate array to avoid column_stack RAM churn
+    # VTK strictly requires float32 or float64 geometry arrays
+    coords = np.empty((rows * cols, 3), dtype=np.float32)
 
-    # Zero-copy conversion from NumPy array to VTK array
-    vtk_float_array: vtk.vtkFloatArray = numpy_support.numpy_to_vtk(
+    # Write directly into the contiguous block
+    coords[:, 0] = mx.ravel()
+    coords[:, 1] = noise_map.ravel()
+    coords[:, 2] = mz.ravel()
+
+    # True zero-copy conversion from the structured NumPy array to VTK
+    vtk_float_array = numpy_support.numpy_to_vtk(
         num_array=coords, 
         deep=False, 
         array_type=vtk.VTK_FLOAT
     )
-    # Tell VTK that every 3 values represent one point (tuple)
-    vtk_float_array.SetNumberOfComponents(3)
+    # vtk_float_array automatically infers 3 components from the (N, 3) shape
     
-    # Create the points container
-    points: vtk.vtkPoints = vtk.vtkPoints()
+    points = vtk.vtkPoints()
     points.SetData(vtk_float_array)
     
-    # Define the topology: StructuredGrid implies a regular grid connection between points
-    sgrid: vtk.vtkStructuredGrid = vtk.vtkStructuredGrid()
+    sgrid = vtk.vtkStructuredGrid()
+    # VTK Dimensions: (X-size, Y-size, Z-size).
+    # We mapped cols->X, rows->Y (in 2D grid logic, though physically Z), 1->Z
     sgrid.SetDimensions(cols, rows, 1) 
     sgrid.SetPoints(points)
 
-    # Convert the StructuredGrid to PolyData (general geometry) for easier export
-    geom_filter: vtk.vtkGeometryFilter = vtk.vtkGeometryFilter()
+    geom_filter = vtk.vtkGeometryFilter()
     geom_filter.SetInputData(sgrid)
     geom_filter.Update()
     
@@ -102,17 +96,10 @@ def gen_mesh(noise_map: NDArray[np.floating]) -> None:
         noise_map (NDArray[np.floating]): The final processed heightmap to be meshed.
     """
     logging.info("Generating VTK mesh...")
-    logging.debug(f"Mesh#{SEED} - Noise loaded")
-    
-    logging.debug(f"Mesh#{SEED} - Creating primary mesh (Vectorized)...")
+
     # Convert the 2D heightmap array into 3D geometry
-    vtk_mesh: vtk.vtkPolyData = _create_vtk_mesh_vectorized(noise_map)
-    logging.debug(f"Mesh#{SEED} - Created primary mesh")
-    
+    vtk_mesh = _create_vtk_mesh_vectorized(noise_map)
     if SAVE:
-        logging.debug(f"Mesh#{SEED} - Saving...")
         makedirs("meshes", exist_ok=True)
-        _save_vtk_mesh(vtk_mesh, f"meshes/mesh_{SEED}.vtk")
-        logging.debug(f"Mesh#{SEED} - Saved")
-    
+        _save_vtk_mesh(vtk_mesh, f"meshes/mesh_{SEED}.vtk") 
     logging.info("VTK meshes generated")

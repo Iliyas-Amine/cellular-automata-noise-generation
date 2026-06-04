@@ -1,16 +1,15 @@
 import numpy as np
-import random
 import cv2
-import os, time, logging
+import os
 from typing import List
 
 from numpy.typing import NDArray
 
 from utils.config import (
     SAVE, TILES, GRID_SIZE, KERNEL_01, KERNEL_02, KERNEL_03, 
-    KERNEL_04, KERNEL_05, CONTRAST_FACTOR, UNSHARP_PERCENT, 
+    KERNEL_04, KERNEL_05, CONTRAST_FACTOR, 
     RESIZE, MULTIPLIERS, THRESHOLD, WEIGHTS, AMPLITUDE,
-    STIT_RNG, SMOO_RNG, SEED, STRIDE, OVERLAP
+    STIT_RNG, SMOO_RNG, SEED, BLEND_PERCENT
 )
 
 def save_noise_image(data: NDArray[np.floating], folder: str, filename: str) -> None:
@@ -29,16 +28,16 @@ def save_noise_image(data: NDArray[np.floating], folder: str, filename: str) -> 
     if SAVE:
         os.makedirs(folder, exist_ok=True)
         # Normalize the float data (-1.0 to 1.0) to 0.0 to 2.0 range
-        clipped: NDArray[np.floating] = np.clip(data, -1.0, 1.0) 
-        shifted: NDArray[np.floating] = clipped + 1.0 
+        clipped = np.clip(data, -1.0, 1.0) 
+        shifted = clipped + 1.0 
         
         # Scale to 0-255 for standard 8-bit image format
-        norm_img: NDArray[np.uint8] = (shifted * 127.5).astype(np.uint8) 
+        norm_img = (shifted * 127.5).astype(np.uint8) 
         
-        filename: str = os.path.join(folder, f"{filename}.png") 
+        filename = os.path.join(folder, f"{filename}.png") 
         cv2.imwrite(filename, norm_img)
 
-def batch_tilemap(matrices: NDArray[np.int8]) -> List[NDArray[np.floating]]:
+def batch_tilemap(matrices: NDArray[np.int8]) -> NDArray[np.floating]:
     """
     Converts binary cellular automata grids into smooth, distinct terrain tiles.
 
@@ -56,173 +55,140 @@ def batch_tilemap(matrices: NDArray[np.int8]) -> List[NDArray[np.floating]]:
         smoothed heightmap tile.
     """
     # Convert input binary matrices to float for noise processing
-    matrices_arr: NDArray[np.int8] = np.array(matrices)
     # Generate base white noise
-    noise_batch: NDArray[np.float32] = SMOO_RNG.uniform(0.01, 1, size=(TILES, GRID_SIZE, GRID_SIZE)).astype(np.float32)
+    noise_batch = SMOO_RNG.uniform(0.01, 1, size=(TILES, GRID_SIZE, GRID_SIZE)).astype(np.float32)
 
-    mask_above: NDArray[np.bool_] = (matrices_arr == 1)
+    # In-place negation for empty cells avoids allocating a third 3D matrix
+    mask_below = (matrices == 0)
+    noise_batch[mask_below] *= -1.0
 
-    # Apply noise selectively based on the cellular automata mask
-    # Cells that are '1' get positive noise (mountains), '0' get negative noise (valleys)
-    noise_batch = np.where(mask_above, noise_batch, -noise_batch)
-
-    smoothed_batch: List[NDArray[np.floating]] = []
     for i in range(TILES):
         # Apply a strong Gaussian blur to smooth the sharp white noise into rolling terrain
-        blurred: NDArray[np.floating] = cv2.GaussianBlur(noise_batch[i], KERNEL_01, 0)
-        smoothed_batch.append(blurred)
-        
-        save_noise_image(blurred, "tiles", f"tile_{SEED}_{i}")
+        cv2.GaussianBlur(noise_batch[i], KERNEL_01, 0, dst=noise_batch[i])
+        save_noise_image(noise_batch[i], "tiles", f"tile_{SEED}_{i}")
     
-    return smoothed_batch
+    return noise_batch
 
 def _stitch(multiplier: int, tiles: NDArray[np.floating]) -> NDArray[np.float32]:
     """
     Creates a large noise grid by stitching together random base tiles.
-    Completely vectorized using tensor transposition to eliminate Python loops.
-    """
-    total_tiles: int = multiplier * multiplier
     
-    # 1. Native sampling of the 3D tiles array along Axis 0
-    selected_tiles = STIT_RNG.choice(tiles, size=total_tiles, replace=True)
-
-    # 2. Vectorized block-rearrangement (Eliminates the 404/4096 loop entirely!)
-    # Reshape to 4D: (tile_row, tile_col, pixel_row, pixel_col)
-    tensor_4d = selected_tiles.reshape(multiplier, multiplier, GRID_SIZE, GRID_SIZE)
-    
-    # Transpose to block tile_row with pixel_row, and tile_col with pixel_col
-    transposed = tensor_4d.transpose(0, 2, 1, 3)
-    
-    # Collapse back into a continuous 2D stitched canvas 
-    return transposed.reshape(multiplier * GRID_SIZE, multiplier * GRID_SIZE)
-
-def _enhance(noise_grid: NDArray[np.float32]) -> NDArray[np.float32]:
-    """
-    Refines a raw noise grid by applying contrast and sharpening.
-
-    This processing step applies a box blur to blend tile seams, increases the 
-    contrast to utilize the full dynamic range, and optionally applies an 
-    Unsharp Mask filter to highlight ridge lines and details.
+    This function scales up the terrain by selecting random pre-generated tiles 
+    and arranging them into a larger grid format. It is completely vectorized 
+    with zero redundant memory allocations.
 
     Args:
-        noise_grid (NDArray[np.float32]): The raw stitched noise grid.
+        multiplier (int): The scale factor defining the grid size (e.g., a multiplier 
+            of 2 creates a 2x2 grid of tiles).
+        tiles (NDArray[np.floating]): A 3D array of the pre-generated smooth terrain tiles.
 
     Returns:
-        NDArray[np.float32]: The enhanced and sharpened noise grid.
+        NDArray[np.float32]: A 2D array representing the stitched terrain map.
     """
-    t0: int = time.time()
-    # Initial blur to blend the seams between stitched tiles
-    cv2.blur(noise_grid, KERNEL_02, dst=noise_grid)
-    t1: int = time.time()
-    logging.debug(f"Time for initial blur: {t1-t0}s")
-    # 2. High-Contrast Algebraic Sigmoid (Zero-Allocation Register Math)
-    # Computes: noise_grid / sqrt(0.12 + noise_grid^2)
-    denom = noise_grid ** 2
-    
-    # TUNING KNOB: 
-    # Lower this value (e.g., 0.05) for harsher contrast and wider flat plateaus.
-    # Raise this value (e.g., 0.25) to soften the cliffs into rolling hills.
-    denom += 0.065 
-    
-    np.sqrt(denom, out=denom)
-    noise_grid /= denom
-    t2: int = time.time()
-    logging.debug(f"Time for contrasting and tanh: {t2-t1}s")
+    total_tiles = multiplier * multiplier
+    selected_tiles = STIT_RNG.choice(tiles, size=total_tiles, replace=True)
 
-    amount: float = UNSHARP_PERCENT / 100.0 if UNSHARP_PERCENT > 1 else float(UNSHARP_PERCENT)    
-    # Apply Unsharp Masking to sharpen details (peaks and ridges)
-    if amount != 0:
-        blurred_mask: NDArray[np.float32] = cv2.blur(noise_grid, KERNEL_03)
-        t3: int = time.time()
-        logging.debug(f"Time for secondary blur: {t3-t2}s")
-        cv2.addWeighted(
-            noise_grid, 1.0 + amount, 
-            blurred_mask, -amount, 
-            0, 
-            dst=noise_grid
-        )
-        np.clip(noise_grid, -1.0, 1.0, out=noise_grid)
-        t4: int = time.time()
-        logging.debug(f"Time for sharpening: {t4-t3}s")
-    
-    return noise_grid
-    
+    tensor_4d = selected_tiles.reshape(multiplier, multiplier, GRID_SIZE, GRID_SIZE)
+    transposed = tensor_4d.transpose(0, 2, 1, 3)
+
+    return transposed.reshape(multiplier * GRID_SIZE, multiplier * GRID_SIZE)
+
+def _enhance(noise_grid: NDArray[np.float32], scratch_grid: NDArray[np.float32]) -> None:
+    """
+    Applies in-place smoothing and algebraic soft-clipping to the noise grid.
+
+    To eliminate memory allocation overhead during batch processing, this function 
+    performs all matrix operations in-place. It applies a border-replicated box 
+    blur to smooth high-frequency artifacts, then normalizes the terrain using 
+    a sigmoid-like transfer curve. This boosts mid-tone terrain while softly 
+    rolling off extreme peaks and valleys to prevent hard clipping.
+
+    Args:
+        noise_grid (NDArray[np.float32]): The primary noise array, mutated in-place.
+        scratch_grid (NDArray[np.float32]): A pre-allocated workspace array of the 
+            exact same shape, used to hold intermediate squares to avoid RAM churn.
+    """
+
+    cv2.blur(noise_grid, KERNEL_02, dst=noise_grid, borderType=cv2.BORDER_REPLICATE)
+
+    np.multiply(noise_grid, noise_grid, out=scratch_grid)
+    scratch_grid += CONTRAST_FACTOR/100 
+    np.sqrt(scratch_grid, out=scratch_grid)
+    noise_grid /= scratch_grid
+
 def _resize(noise_grid: NDArray[np.float32]) -> NDArray[np.float32]:
     """
     Resizes the noise grid to the final target resolution.
 
-    Ensures that all noise layers, regardless of their original 'multiplier' 
-    scale, match the final dimensions required for stacking.
+    Ensures that all multi-scale noise layers, regardless of their original 
+    'multiplier' grid size, are normalized to the final dimensions required 
+    for coherent stacking.
 
     Args:
         noise_grid (NDArray[np.float32]): The input noise grid of arbitrary size.
 
     Returns:
-        NDArray[np.float32]: The grid resized to the global RESIZE dimension.
+        NDArray[np.float32]: The grid resized to the global RESIZE dimension using 
+        bilinear interpolation.
     """
-    target_size: int = int(RESIZE)
     # Upscale or downscale the grid to the final desired resolution
-    if noise_grid.shape[0] != target_size:
+    if noise_grid.shape[0] != RESIZE:
         noise_grid = cv2.resize(
             noise_grid, 
-            (target_size, target_size), 
+            (RESIZE, RESIZE), 
             interpolation=cv2.INTER_LINEAR
         )
     return noise_grid
 
-def _join_tiles(multiplier: int, tiles: NDArray[np.floating]) -> NDArray[np.float32]:
+def _join_tiles(multiplier: int, tiles: NDArray[np.floating], scratch_grid: NDArray[np.float32]) -> NDArray[np.float32]:
     """
-    Executes the full pipeline to create a single noise layer at a specific scale.
+    Executes the split pipeline for a single frequency layer of noise.
 
-    This helper function orchestrates the stitching, enhancing, and resizing 
-    steps to produce one coherent noise layer (frequency) from the base tiles.
+    This acts as a coordinator for an individual octave layer. It stitches tiles at 
+    their native scale, applies initial smoothing, resizes to the master canvas 
+    resolution, and finally enhances the contrast.
 
     Args:
-        multiplier (int): The scale factor for this specific noise layer.
-        tiles (NDArray[np.floating]): The source tiles to use for generation.
+        multiplier (int): The scale factor (frequency) for this specific noise layer.
+        tiles (NDArray[np.floating]): The base 3D array of smooth terrain tiles.
+        scratch_grid (NDArray[np.float32]): A pre-allocated workspace array for in-place math.
 
     Returns:
-        NDArray[np.float32]: A fully processed 2D noise layer ready for stacking.
+        NDArray[np.float32]: A single, fully processed 2D octave layer ready for stacking.
     """
-    # Pipeline: Stitch small tiles -> Enhance/Sharpen -> Resize to target resolution 
-    t0: int = time.time()
-    noise_grid: NDArray[np.float32] = _stitch(multiplier, tiles)
-    t1: int = time.time()
-    logging.debug(f"Time for full _stitch: {t1-t0}s")
-    noise_grid = _enhance(noise_grid)
-    t2: int = time.time() 
-    logging.debug(f"Time for full _enhance: {t2-t1}s") 
-    noise_grid = _resize(noise_grid)   
-    t3: int = time.time() 
-    logging.debug(f"Time for full _resize: {t3-t2}s") 
-    t4: int = time.time()
-    
-    logging.debug(f"Time for full _join_tiles for {multiplier}: {t4-t0}s")
+    noise_grid = _stitch(multiplier, tiles)
+
+    cv2.blur(noise_grid, KERNEL_02, dst=noise_grid, borderType=cv2.BORDER_REPLICATE)
+
+    noise_grid = _resize(noise_grid)
+
+    _enhance(noise_grid, scratch_grid)
+
     save_noise_image(noise_grid, "noises", f"noise_g{multiplier}_{SEED}")
 
     return noise_grid
 
-def gen_noises(tiles: List[NDArray[np.floating]]) -> List[NDArray[np.float32]]:
+def gen_noises(tiles: NDArray[np.floating]) -> List[NDArray[np.float32]]:
     """
     Generates multiple noise layers at different frequencies (octaves).
 
-    Iterates through the configured MULTIPLIERS list to create a collection of 
-    noise maps, each representing terrain features at different scales (e.g., 
-    large continents vs. small hills).
+    Orchestrates the creation of all individual octave layers defined in the 
+    MULTIPLIERS configuration. It pre-allocates a single workspace to prevent 
+    RAM churn under load, executing the `_join_tiles` pipeline for each scale.
 
     Args:
-        tiles (List[NDArray[np.floating]]): The base terrain tiles.
+        tiles (List[NDArray[np.floating]]): The list of generated 2D heightmap base tiles.
 
     Returns:
-        List[NDArray[np.float32]]: A list of noise layers, all resized to the 
-        same final resolution.
-    """
-    tiles_array: NDArray[np.floating] = np.array(tiles) 
+        List[NDArray[np.float32]]: A list of processed 2D arrays, representing 
+        each octave layer needed for the final stacking process.
+    """ 
+    # Pre-allocate a single master workspace
+    scratch_grid = np.empty((RESIZE, RESIZE), dtype=np.float32)
 
-    # Generate multiple noise layers at different frequencies (scales)
     noises: List[NDArray[np.float32]] = []
     for multiplier in MULTIPLIERS:
-        noise_grid: NDArray[np.float32] = _join_tiles(multiplier, tiles_array)
+        noise_grid = _join_tiles(multiplier, tiles, scratch_grid)
         noises.append(noise_grid)
     return noises
 
@@ -241,26 +207,23 @@ def stacking(noises: List[NDArray[np.float32]]) -> NDArray[np.float32]:
     Returns:
         NDArray[np.float32]: The final, single-layer 2D heightmap ready for meshing.
     """
-    noise_stack: NDArray[np.float32] = np.array(noises, dtype=np.float32)
-    weights: NDArray[np.float32] = np.asarray(WEIGHTS, dtype=np.float32)
+    noise_stack = np.array(noises, dtype=np.float32)
+    weights = np.asarray(WEIGHTS, dtype=np.float32)
 
     # Perform weighted sum (Dot product) to combine all noise layers
     # This creates the fractal "Perlin-like" effect where some layers provide large shapes and others provide detail
-    noise_sum: NDArray[np.float32] = np.tensordot(weights, noise_stack, axes=1)
+    noise_sum = np.tensordot(weights, noise_stack, axes=1)
 
     # Identify "water" or "lowland" areas and map them to 1.0 and 0.0
-    mask: NDArray[np.float32] = (noise_sum <= THRESHOLD).astype(np.float32)
+    mask = (noise_sum <= THRESHOLD).astype(np.float32)
     
     if mask.any():
         # Soften the hard binary edges by blurring the mask itself
-        smooth_alpha = cv2.GaussianBlur(mask, (15, 15), 0)
+        smooth_alpha = cv2.GaussianBlur(mask, KERNEL_03, 0)
         # Apply extra smoothing to low areas to simulate sediment or water
         blurred_section: NDArray[np.float32] = cv2.blur(noise_sum, KERNEL_04)
         # Linearly blend across the entire map using the alpha channel
-        # Deep valleys get the full 85% blur mix.
-        # Highlands get 0% blur mix (completely untouched).
-        # The borders transition perfectly smoothly, eliminating derivative creases.
-        blend_factor = smooth_alpha * 0.85
+        blend_factor = smooth_alpha * BLEND_PERCENT
         noise_sum = (blurred_section * blend_factor) + (noise_sum * (1.0 - blend_factor))
     # Final overall smooth to remove any remaining artifacts
     cv2.blur(noise_sum, KERNEL_05, dst=noise_sum)
@@ -268,4 +231,5 @@ def stacking(noises: List[NDArray[np.float32]]) -> NDArray[np.float32]:
     save_noise_image(noise_sum, "fnoises", f"noise_{SEED}")
 
     # Scale the normalized heightmap to the final physical height (Amplitude)
-    return noise_sum * AMPLITUDE
+    noise_sum *= float(AMPLITUDE)
+    return noise_sum
