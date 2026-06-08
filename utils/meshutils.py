@@ -1,12 +1,10 @@
 import logging
-
 import numpy as np
 from numpy.typing import NDArray
-from os import makedirs
+from typing import Any
+import os
 import vtk
 from vtk.util import numpy_support
-
-from utils.config import SAVE, SEED
 
 def _create_vtk_mesh_vectorized(noise_map: NDArray[np.floating]) -> vtk.vtkPolyData:
     """
@@ -84,7 +82,7 @@ def _save_vtk_mesh(polydata: vtk.vtkPolyData, filename: str) -> None:
     writer.SetFileTypeToBinary()
     writer.Write()
 
-def gen_mesh(noise_map: NDArray[np.floating]) -> None:
+def gen_mesh(noise_map: NDArray[np.floating], config: dict[str, Any]) -> None:
     """
     Orchestrates the generation and storage of the 3D terrain mesh.
 
@@ -99,7 +97,7 @@ def gen_mesh(noise_map: NDArray[np.floating]) -> None:
 
     # Convert the 2D heightmap array into 3D geometry
     vtk_mesh = _create_vtk_mesh_vectorized(noise_map)
-    if SAVE:
-        makedirs("meshes", exist_ok=True)
-        _save_vtk_mesh(vtk_mesh, f"meshes/mesh_{SEED}.vtk") 
+    if config["SAVE"]:
+        os.makedirs("meshes", exist_ok=True)
+        _save_vtk_mesh(vtk_mesh, f"meshes/mesh_{config['SEED']}.vtk") 
     logging.info("VTK meshes generated")

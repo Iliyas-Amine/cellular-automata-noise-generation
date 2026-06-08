@@ -1,23 +1,13 @@
 import logging
-from typing import List
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.ndimage import correlate
 
 from utils.noiseutils import batch_tilemap
-from utils.config import (
-    GRID_SIZE, 
-    TILES, 
-    INITIAL_SEEDS, 
-    UPDATE_ITERATIONS, 
-    NEIGHBOR_ACTIVATION_FACTOR, 
-    NEIGHBOR_KERNEL,
-    POS_RNG,
-    PROB_RNG
-)
 
-def _update_batch(matrices: NDArray[np.int8]) -> NDArray[np.int8]:
+def _update_batch(matrices: NDArray[np.int8], config: dict[str, Any]) -> NDArray[np.int8]:
     """
     Performs a single simulation step on a batch of Cellular Automata grids.
 
@@ -37,22 +27,22 @@ def _update_batch(matrices: NDArray[np.int8]) -> NDArray[np.int8]:
     # 'mode=constant' and 'cval=0' ensures edges behave as if surrounded by empty space
     neighbor_counts = correlate(
         matrices, 
-        NEIGHBOR_KERNEL, 
+        config["NEIGHBOR_KERNEL"], 
         mode='wrap'
     )
 
     # Generate a random probability grid for stochastic growth
     # This ensures that even with identical neighbors, growth patterns differ
-    random_grid = PROB_RNG.uniform(0, 1, matrices.shape)
+    random_grid = config["PROB_RNG"].uniform(0, 1, matrices.shape)
     
     # Determine which cells grow based on neighbors and chance
     # Rule: An empty cell becomes active IF random_val < (neighbors * factor)
-    growth_mask = (matrices == 0) & (random_grid < (neighbor_counts * NEIGHBOR_ACTIVATION_FACTOR))
+    growth_mask = (matrices == 0) & (random_grid < (neighbor_counts * config["NEIGHBOR_ACTIVATION_FACTOR"]))
 
     # Return the union of old cells and newly grown cells
     return matrices | growth_mask
 
-def _gen_pop_batch() -> NDArray[np.int8]:
+def _gen_pop_batch(config: dict[str, Any]) -> NDArray[np.int8]:
     """
     Initializes and evolves a fresh batch of cellular automata environments.
 
@@ -65,13 +55,18 @@ def _gen_pop_batch() -> NDArray[np.int8]:
         NDArray[np.int8]: A 3D array containing the final binary states of 
         all generated tiles.
     """
+    # Initialize parameters
+    TILES = config["TILES"]
+    GRID_SIZE = config["GRID_SIZE"]
+    INITIAL_SEEDS = config["INITIAL_SEEDS"]
+    UPDATE_ITERATIONS = config["UPDATE_ITERATIONS"]
     # Initialize empty 3D environment (Batch of 2D grids)
     # Shape is (TILES, 64, 64) allowing us to process all tiles in parallel
     env = np.zeros((TILES, GRID_SIZE, GRID_SIZE), dtype=np.int8)
 
     # Select random indices to seed the population
     # We sample from the flattened total size to ensure unique seeds across the batch
-    flat_indices = POS_RNG.choice(
+    flat_indices = config["POS_RNG"].choice(
         TILES * GRID_SIZE * GRID_SIZE, 
         INITIAL_SEEDS, 
         replace=False
@@ -85,11 +80,11 @@ def _gen_pop_batch() -> NDArray[np.int8]:
 
     # Run the simulation steps
     for _ in range(UPDATE_ITERATIONS):
-        env = _update_batch(env)
+        env = _update_batch(env, config)
         
     return env
 
-def gen_tiles() -> NDArray[np.floating]:
+def gen_tiles(config: dict[str, Any]) -> NDArray[np.floating]:
     """
     Orchestrates the generation of smooth terrain tiles.
 
@@ -101,14 +96,14 @@ def gen_tiles() -> NDArray[np.floating]:
         List[NDArray[np.floating]]: A list of generated 2D heightmap arrays, 
         where each array represents a seamless terrain tile ready for noise stitching.
     """
-    logging.info(f"Generating {TILES} tiles...")
+    logging.info(f"Generating {config['TILES']} tiles...")
     
     # Create the raw binary (0/1) cellular automata grids
-    matrices = _gen_pop_batch()
+    matrices = _gen_pop_batch(config)
     
     # batch_tilemap takes the int8 binary maps and returns blurred float maps
     # This converts the sharp "islands" into smooth heightmap gradients
-    tiles = batch_tilemap(matrices)
+    tiles = batch_tilemap(matrices, config)
     
-    logging.info(f"All {TILES} tiles generated")
+    logging.info(f"All {config['TILES']} tiles generated")
     return tiles
