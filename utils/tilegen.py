@@ -3,9 +3,19 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.ndimage import correlate
+from scipy.ndimage import correlate1d
 
 from utils.noiseutils import batch_tilemap, hash_func
+
+def correlate(batch_grid, mode='wrap'):
+    acc_dtype = np.int16 if batch_grid.dtype in (bool, np.int8, np.uint8) else batch_grid.dtype
+
+    out = correlate1d(batch_grid, [1, 1, 1], axis=1, mode=mode, output=acc_dtype)
+    correlate1d(out, [1, 1, 1], axis=2, mode=mode, output=out)
+
+    out -= batch_grid
+    
+    return out.astype(batch_grid.dtype, copy=False)
 
 def _update_batch(matrices: NDArray[np.int8], config: dict[str, Any], seed: int) -> NDArray[np.int8]:
     """
@@ -25,11 +35,7 @@ def _update_batch(matrices: NDArray[np.int8], config: dict[str, Any], seed: int)
     """
     # Correlate calculates the sum of neighbors for each cell
     # 'mode=constant' and 'cval=0' ensures edges behave as if surrounded by empty space
-    neighbor_counts = correlate(
-        matrices, 
-        config["NEIGHBOR_KERNEL"], 
-        mode='wrap'
-    )
+    neighbor_counts = correlate(matrices)
 
     growth_grid = hash_func(matrices.shape,seed=seed)
 
