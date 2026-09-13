@@ -237,8 +237,6 @@ def stacking(noises: List[NDArray[np.float32]], config: dict[str, Any]) -> NDArr
         # Linearly blend across the entire map using the alpha channel
         blend_factor = smooth_alpha * config["BLEND_PERCENT"]
         noise_sum = (blurred_section * blend_factor) + (noise_sum * (1.0 - blend_factor))
-    # Final overall smooth to remove any remaining artifacts
-    cv2.blur(noise_sum, config["KERNEL_05"], dst=noise_sum)
     
     if config["SAVE"]:
         save_noise_image(noise_sum, "fnoises", f"noise_{config['SEED']}")
