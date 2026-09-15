@@ -80,11 +80,15 @@ def _gen_pop_batch(config: dict[str, Any]) -> NDArray[np.int8]:
     # Set initial seeds to 'Alive' (1)
     env[x, y, z] = 1
 
+    stacked = np.zeros(env.shape, dtype=np.int16)
+    stacked += env.astype(np.int16)
+
     # Run the simulation steps
     for i in range(UPDATE_ITERATIONS):
         env = _update_batch(env, config, i)
-        
-    return env
+        stacked += env.astype(np.int16)
+
+    return stacked
 
 def gen_tiles(config: dict[str, Any]) -> NDArray[np.floating]:
     """

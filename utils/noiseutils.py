@@ -49,7 +49,7 @@ def save_noise_image(data: NDArray[np.floating], folder: str, filename: str) -> 
     filename = os.path.join(folder, f"{filename}.png") 
     cv2.imwrite(filename, norm_img)
 
-def batch_tilemap(matrices: NDArray[np.int8], config: dict[str, Any]) -> NDArray[np.floating]:
+def batch_tilemap(matrices: NDArray[np.int16], config: dict[str, Any]) -> NDArray[np.floating]:
     """
     Converts binary cellular automata grids into smooth, distinct terrain tiles.
     This function takes the raw binary output from the simulation and applies 
@@ -65,13 +65,16 @@ def batch_tilemap(matrices: NDArray[np.int8], config: dict[str, Any]) -> NDArray
         List[NDArray[np.floating]]: A list of 2D arrays, each representing a 
         smoothed heightmap tile.
     """
-    # Convert input binary matrices to float for noise processing
-    # Generate base white noise
-    noise_batch = hash_func(matrices.shape)
+    
+    m_float = matrices.astype(np.float32)
 
-    # In-place negation for empty cells avoids allocating a third 3D matrix
+    min_val = m_float.min()
+    max_val = m_float.max()
+
+    noise_batch = (m_float - min_val) / (max_val - min_val)
+
     mask_below = (matrices == 0)
-    noise_batch[mask_below] *= -1.0
+    noise_batch[mask_below] = -1.0 * hash_func(matrices.shape)[mask_below]
 
     for i in range(config["TILES"]):
         if config["SAVE"]:
