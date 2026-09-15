@@ -65,7 +65,7 @@ def batch_tilemap(matrices: NDArray[np.int16], config: dict[str, Any]) -> NDArra
         List[NDArray[np.floating]]: A list of 2D arrays, each representing a 
         smoothed heightmap tile.
     """
-    
+
     m_float = matrices.astype(np.float32)
 
     min_val = m_float.min()
@@ -83,29 +83,29 @@ def batch_tilemap(matrices: NDArray[np.int16], config: dict[str, Any]) -> NDArra
     return noise_batch
 
 def _stitch(multiplier: int, tiles: NDArray[np.floating], config: dict[str, Any]) -> NDArray[np.float32]:
-    """
-    Creates a large noise grid by stitching together random base tiles.
-    
-    This function scales up the terrain by selecting random pre-generated tiles 
-    and arranging them into a larger grid format. It is completely vectorized 
-    with zero redundant memory allocations.
-
-    Args:
-        multiplier (int): The scale factor defining the grid size (e.g., a multiplier 
-            of 2 creates a 2x2 grid of tiles).
-        tiles (NDArray[np.floating]): A 3D array of the pre-generated smooth terrain tiles.
-
-    Returns:
-        NDArray[np.float32]: A 2D array representing the stitched terrain map.
-    """
-    total_tiles = multiplier * multiplier
-    selected_tiles = config["STIT_RNG"].choice(tiles, size=total_tiles, replace=True)
     GRID_SIZE = config["GRID_SIZE"]
-                                             
-    tensor_4d = selected_tiles.reshape(multiplier, multiplier, GRID_SIZE, GRID_SIZE)
-    transposed = tensor_4d.transpose(0, 2, 1, 3)
+    stride = GRID_SIZE // 2         
 
-    return transposed.reshape(multiplier * GRID_SIZE, multiplier * GRID_SIZE)
+    hann_1d = 0.5 * (1.0 - np.cos(2.0 * np.pi * np.arange(GRID_SIZE) / (GRID_SIZE - 1)))
+    hann_2d = np.outer(hann_1d, hann_1d).astype(np.float32)
+
+    tiles_per_axis = multiplier + 1
+    canvas_dim = (tiles_per_axis - 1) * stride + GRID_SIZE
+    
+    elev_canvas = np.zeros((canvas_dim, canvas_dim), dtype=np.float32)
+    weight_canvas = np.zeros((canvas_dim, canvas_dim), dtype=np.float32)
+
+    for r in range(tiles_per_axis):
+        for c in range(tiles_per_axis):
+            tile = config["STIT_RNG"].choice(tiles)
+            y, x = r * stride, c * stride
+            
+            elev_canvas[y:y+GRID_SIZE, x:x+GRID_SIZE] += tile * hann_2d
+            weight_canvas[y:y+GRID_SIZE, x:x+GRID_SIZE] += hann_2d
+
+    normalized = elev_canvas / np.maximum(weight_canvas, 1e-7)
+
+    return normalized[stride:-stride, stride:-stride]
 
 def _enhance(noise_grid: NDArray[np.float32], scratch_grid: NDArray[np.float32], config: dict[str, Any]) -> None:
     """
