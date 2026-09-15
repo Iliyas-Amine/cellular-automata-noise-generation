@@ -1,12 +1,9 @@
 SEED = 12345678901234567890123456789012
 
 [kernels]
-NEIGHBOR_KERNEL = [[[1, 1, 1],[1, 0, 1],[1, 1, 1]]]
-KERNEL_1 = [31, 31]
 KERNEL_2 = [15, 15]
 KERNEL_3 = [15, 15]
 KERNEL_4 = [31, 31]
-KERNEL_5 = [3, 3]
 
 [params]
 TILES = 20
