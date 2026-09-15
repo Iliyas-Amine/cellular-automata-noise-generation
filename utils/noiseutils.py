@@ -123,8 +123,6 @@ def _enhance(noise_grid: NDArray[np.float32], scratch_grid: NDArray[np.float32],
             exact same shape, used to hold intermediate squares to avoid RAM churn.
     """
 
-    cv2.blur(noise_grid, config["KERNEL_02"], dst=noise_grid, borderType=cv2.BORDER_REPLICATE)
-
     np.multiply(noise_grid, noise_grid, out=scratch_grid)
     scratch_grid += config["CONTRAST_FACTOR"]/100 
     np.sqrt(scratch_grid, out=scratch_grid)
@@ -171,8 +169,6 @@ def _join_tiles(multiplier: int, tiles: NDArray[np.floating], scratch_grid: NDAr
         NDArray[np.float32]: A single, fully processed 2D octave layer ready for stacking.
     """
     noise_grid = _stitch(multiplier, tiles, config)
-
-    cv2.blur(noise_grid, config["KERNEL_02"], dst=noise_grid, borderType=cv2.BORDER_REPLICATE)
 
     noise_grid = _resize(noise_grid, config["RESIZE"])
 
@@ -234,9 +230,9 @@ def stacking(noises: List[NDArray[np.float32]], config: dict[str, Any]) -> NDArr
     
     if mask.any():
         # Soften the hard binary edges by blurring the mask itself
-        smooth_alpha = cv2.GaussianBlur(mask, config["KERNEL_03"], 0)
+        smooth_alpha = cv2.GaussianBlur(mask, config["KERNEL_01"], 0)
         # Apply extra smoothing to low areas to simulate sediment or water
-        blurred_section: NDArray[np.float32] = cv2.blur(noise_sum, config["KERNEL_04"])
+        blurred_section: NDArray[np.float32] = cv2.blur(noise_sum, config["KERNEL_02"])
         # Linearly blend across the entire map using the alpha channel
         blend_factor = smooth_alpha * config["BLEND_PERCENT"]
         noise_sum = (blurred_section * blend_factor) + (noise_sum * (1.0 - blend_factor))
